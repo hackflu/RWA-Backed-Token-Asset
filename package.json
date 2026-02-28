@@ -1,0 +1,31 @@
+{
+  "name": "rwa-project",
+  "version": "1.0.0",
+  "description": "1. Only Owner can mint dTSLA 2. Anyone can redeem dTSLA for USDC or \"the stableCoin\" of choice. 3. Chainlink function will kick off a TSLA 4. The user will have to then call finishRedeem to get their USDC.",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib",
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "uploadSecrets" : "source .env && node ./functions/uploadSecrets.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hackflu/RWA-Backed-Token-Asset.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/hackflu/RWA-Backed-Token-Asset/issues"
+  },
+  "homepage": "https://github.com/hackflu/RWA-Backed-Token-Asset#readme",
+  "dependencies": {
+    "@chainlink/functions-toolkit": "^0.3.2",
+    "deno": "^2.6.8",
+    "dotenv": "^17.3.1"
+  }
+}

@@ -41,14 +41,15 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
     error dTSLA_NotEngoughCollateral();
     error dTSLA_DosentMeetMinimumWithdrawalAmount();
     error dTSLA_TransactionFailed();
-    
+
     /*//////////////////////////////////////////////////////////////
                              STATE VARIABLE
     //////////////////////////////////////////////////////////////*/
     string private s_mintSourceCode;
     string private s_redeemSourceCode;
     mapping(bytes32 requestId => dTeslaRequest request) private s_requestId;
-    mapping(address user => uint256 pendingWithdrawalAmount) private s_userToWithdrawlAmount;
+    mapping(address user => uint256 pendingWithdrawalAmount)
+        private s_userToWithdrawlAmount;
     address constant SEPLOIA_FUNCTIONS_ROUTER =
         0xb83E47C2bC239B3bf370bc41e1459A34b41238D0;
     // for now we are using the LINK/USD
@@ -61,11 +62,14 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
     bytes32 constant DON_ID =
         hex"66756e2d657468657265756d2d7365706f6c69612d3100000000000000000000";
     uint32 constant GAS_LIMIT = 300_000;
+    bytes32 private s_mostRecentRequestId;
     uint256 constant PRECISION = 1e18;
     uint256 constant TSLA_PRICE_DECIMAL_PRECISION = 1e10;
     uint256 constant COLLATERAL_RATIO = 200;
     uint256 constant COLLATERAL_PRECESION = 100;
     uint256 constant MINNIMUM_WITHDRWAL_AMOUNT = 100e18;
+    uint8 s_donHostedSecretsSlotID = 0;
+    uint64 s_donHostedSecretsVersion = 1772194071;
     uint64 immutable i_subscriptionId;
     uint256 private s_portfolioBalance;
 
@@ -99,12 +103,17 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
     ) external onlyOwner returns (bytes32) {
         FunctionsRequest.Request memory request;
         request.initializeRequestForInlineJavaScript(s_mintSourceCode);
+        request.addDONHostedSecrets(
+            s_donHostedSecretsSlotID,
+            s_donHostedSecretsVersion
+        );
         bytes32 requestId = _sendRequest(
             request.encodeCBOR(),
             i_subscriptionId,
             GAS_LIMIT,
             DON_ID
         );
+        s_mostRecentRequestId = requestId;
         s_requestId[requestId].amountOfToken = amount;
         s_requestId[requestId].requester = msg.sender;
         s_requestId[requestId].mintOrRedeem = MinOrRedeem.Mint;
@@ -122,22 +131,22 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
         /// and then the value is converted into the USDC price in USD
         uint256 amountTslaInUsdc = getUsdcValueOfUsd(
             getUsdValueOfTsla(amountdTsla)
-         );
+        );
 
-        if(amountTslaInUsdc < MINNIMUM_WITHDRWAL_AMOUNT) {
-           revert dTSLA_DosentMeetMinimumWithdrawalAmount();
+        if (amountTslaInUsdc < MINNIMUM_WITHDRWAL_AMOUNT) {
+            revert dTSLA_DosentMeetMinimumWithdrawalAmount();
         }
 
         FunctionsRequest.Request memory request;
         request.initializeRequestForInlineJavaScript(s_redeemSourceCode);
-        /// @dev we have to send the token to the chainlink as the request 
+        /// @dev we have to send the token to the chainlink as the request
         /// but so for that passing as the argument
         string[] memory args = new string[](2);
         args[0] = amountdTsla.toString();
         args[1] = amountTslaInUsdc.toString();
         /// setting the args
         request.setArgs(args);
-        
+
         bytes32 requestId = _sendRequest(
             request.encodeCBOR(),
             i_subscriptionId,
@@ -147,6 +156,7 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
         s_requestId[requestId].amountOfToken = amountdTsla;
         s_requestId[requestId].requester = msg.sender;
         s_requestId[requestId].mintOrRedeem = MinOrRedeem.redeem;
+        s_mostRecentRequestId = requestId;
         _burn(msg.sender, amountdTsla);
     }
 
@@ -155,19 +165,38 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
         bytes memory response,
         bytes memory /*err*/
     ) internal virtual override {
-        if (s_requestId[requestId].mintOrRedeem == MinOrRedeem.Mint) {
-            _mintFulFilRequest(requestId, response);
-        } else {
-            _redeemFulFilRequest(requestId , response);
+        // if (s_requestId[requestId].mintOrRedeem == MinOrRedeem.Mint) {
+        //     _mintFulFilRequest(requestId, response);
+        // } else {
+        //     _redeemFulFilRequest(requestId , response);
+        // }
+        s_portfolioBalance = uint256(bytes32(response));
+    }
+
+    function finishMint() external {
+        uint256 amountOfTokenToMint = s_requestId[s_mostRecentRequestId]
+            .amountOfToken;
+        if (
+            _getCollateralRatioAdjustTotalBalance(amountOfTokenToMint) >
+            s_portfolioBalance
+        ) {
+            revert dTSLA_NotEngoughCollateral();
         }
+        _mint(
+            s_requestId[s_mostRecentRequestId].requester,
+            amountOfTokenToMint
+        );
     }
 
     function withdraw() external {
         uint256 amountToWithdraw = s_userToWithdrawlAmount[msg.sender];
         s_userToWithdrawlAmount[msg.sender] = 0;
 
-        bool success = ERC20(SEPOLIA_USDC).transfer(msg.sender, amountToWithdraw);
-        if(!success){
+        bool success = ERC20(SEPOLIA_USDC).transfer(
+            msg.sender,
+            amountToWithdraw
+        );
+        if (!success) {
             revert dTSLA_TransactionFailed();
         }
     }
@@ -211,8 +240,10 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
     }
     /*//////////////////////////////////////////////////////////////
                               VIEW AND PURE
-    //////////////////////////////////////////////////////////////*/'
-    function getRequest(bytes32 requestId) public view returns (dTeslaRequest) {
+    //////////////////////////////////////////////////////////////*/
+    function getRequest(
+        bytes32 requestId
+    ) public view returns (dTeslaRequest memory) {
         return s_requestId[requestId];
     }
     function getPortfolioBalance() public view returns (uint256) {
@@ -263,10 +294,13 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
         }
     }
 
-    function _redeemFulFilRequest(bytes32 requestId,bytes memory response) internal {
+    function _redeemFulFilRequest(
+        bytes32 requestId,
+        bytes memory response
+    ) internal {
         // assume for now this has 18 decimals
         uint256 usdcAmount = uint256(bytes32(response));
-        if(usdcAmount == 0){
+        if (usdcAmount == 0) {
             uint256 mountOfdTSLABurned = s_requestId[requestId].amountOfToken;
             _mint(s_requestId[requestId].requester, mountOfdTSLABurned);
             return;

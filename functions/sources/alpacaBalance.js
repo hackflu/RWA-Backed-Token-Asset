@@ -34,4 +34,4 @@ if (Response.error || !Response.data) { // Check for Response.error or missing d
 const postfolioBalance = Response.data.portfolio_value;
 console.log(`Portfolio Balance: ${postfolioBalance}`); // Corrected typo "Postfolio" to "Portfolio"
 
-return Functions.encodeUint256(Math.round(postfolioBalance * 100))
+return Functions.encodeUint256(Math.round(postfolioBalance * 1000000000000000000))
