@@ -1,19 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import {
-    ConfirmedOwner
-} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
-import {
-    FunctionsClient
-} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
-import {
-    FunctionsRequest
-} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
+import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
+import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
+import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {
-    AggregatorV3Interface
-} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 /// @title dTSLA
@@ -48,30 +40,27 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
     string private s_mintSourceCode;
     string private s_redeemSourceCode;
     mapping(bytes32 requestId => dTeslaRequest request) private s_requestId;
-    mapping(address user => uint256 pendingWithdrawalAmount)
-        private s_userToWithdrawlAmount;
-    address constant SEPLOIA_FUNCTIONS_ROUTER =
-        0xb83E47C2bC239B3bf370bc41e1459A34b41238D0;
-    // for now we are using the LINK/USD
-    address constant SEPLOIA_TSLA_FEED =
-        0xc59E3633BAAC79493d908e63626716e204A45EdF;
-    // USDC/USD feed
-    address constant SEPOLIA_USDC_FEED =
-        0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E;
-    address constant SEPOLIA_USDC = 0xAF0d217854155ea67D583E4CB5724f7caeC3Dc87;
-    bytes32 constant DON_ID =
-        hex"66756e2d657468657265756d2d7365706f6c69612d3100000000000000000000";
-    uint32 constant GAS_LIMIT = 300_000;
+    mapping(address user => uint256 pendingWithdrawalAmount) private s_userToWithdrawlAmount;
     bytes32 private s_mostRecentRequestId;
-    uint256 constant PRECISION = 1e18;
-    uint256 constant TSLA_PRICE_DECIMAL_PRECISION = 1e10;
-    uint256 constant COLLATERAL_RATIO = 200;
-    uint256 constant COLLATERAL_PRECESION = 100;
-    uint256 constant MINNIMUM_WITHDRWAL_AMOUNT = 100e18;
     uint8 s_donHostedSecretsSlotID = 0;
     uint64 s_donHostedSecretsVersion = 1772194071;
     uint64 immutable i_subscriptionId;
     uint256 private s_portfolioBalance;
+    address immutable i_teslaUSD;
+    address immutable i_usdcUSD;
+    address immutable i_tokenOnSepolia;
+    bytes32 immutable i_donId;
+    uint32 immutable i_gasLimit;
+    uint256 immutable i_precision;
+    uint256 immutable i_tsla_price_decimal_precision;
+    uint256 immutable i_collateral_ratio;
+    uint256 immutable i_collateral_precesion;
+    uint256 immutable i_minnimum_withdrwal_amount;
+
+    /*//////////////////////////////////////////////////////////////
+                                 EVENTS
+    //////////////////////////////////////////////////////////////*/
+    event dTSLA__sendMintRequested(uint256 amount);
 
     /*//////////////////////////////////////////////////////////////
                                CONSTRUCTOR
@@ -80,13 +69,29 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
         uint64 subscriptionId,
         address router,
         string memory mintSourceCodem,
-        string memory redeemSourceCode
-    )
-        FunctionsClient(router)
-        ConfirmedOwner(msg.sender)
-        ERC20("dTSLA", "dTSLA")
-    {
+        string memory redeemSourceCode,
+        address teslaUSD,
+        address usdcUSD,
+        address tokenOnSepolia,
+        bytes32 donId,
+        uint32 gas_limit,
+        uint256 precision,
+        uint256 tsla_price_decimal_precision,
+        uint256 collateral_ratio,
+        uint256 collateral_precesion,
+        uint256 minnimum_withdrwal_amount
+    ) FunctionsClient(router) ConfirmedOwner(msg.sender) ERC20("dTSLA", "dTSLA") {
         i_subscriptionId = subscriptionId;
+        i_teslaUSD = teslaUSD;
+        i_usdcUSD = usdcUSD;
+        i_tokenOnSepolia = tokenOnSepolia;
+        i_donId = donId;
+        i_gasLimit = gas_limit;
+        i_precision = precision;
+        i_tsla_price_decimal_precision = tsla_price_decimal_precision;
+        i_collateral_ratio = collateral_ratio;
+        i_collateral_precesion = collateral_precesion;
+        i_minnimum_withdrwal_amount = minnimum_withdrwal_amount;
         s_mintSourceCode = mintSourceCodem;
         s_redeemSourceCode = redeemSourceCode;
     }
@@ -98,25 +103,16 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
     /// 1. See how much TSLA is bought
     /// 2. If enough TSLA is in the alpace account.
     /// mint dTSLA
-    function sendMintRequest(
-        uint256 amount
-    ) external onlyOwner returns (bytes32) {
+    function sendMintRequest(uint256 amount) external onlyOwner returns (bytes32) {
         FunctionsRequest.Request memory request;
         request.initializeRequestForInlineJavaScript(s_mintSourceCode);
-        request.addDONHostedSecrets(
-            s_donHostedSecretsSlotID,
-            s_donHostedSecretsVersion
-        );
-        bytes32 requestId = _sendRequest(
-            request.encodeCBOR(),
-            i_subscriptionId,
-            GAS_LIMIT,
-            DON_ID
-        );
+        request.addDONHostedSecrets(s_donHostedSecretsSlotID, s_donHostedSecretsVersion);
+        bytes32 requestId = _sendRequest(request.encodeCBOR(), i_subscriptionId, i_gasLimit, i_donId);
         s_mostRecentRequestId = requestId;
         s_requestId[requestId].amountOfToken = amount;
         s_requestId[requestId].requester = msg.sender;
         s_requestId[requestId].mintOrRedeem = MinOrRedeem.Mint;
+        emit dTSLA__sendMintRequested(amount);
         return requestId;
     }
 
@@ -129,11 +125,9 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
     function sendRedeemRequest(uint256 amountdTsla) external {
         /// over here we converting the usd value from the getUsdValueOfTsla as USDC
         /// and then the value is converted into the USDC price in USD
-        uint256 amountTslaInUsdc = getUsdcValueOfUsd(
-            getUsdValueOfTsla(amountdTsla)
-        );
+        uint256 amountTslaInUsdc = getUsdcValueOfUsd(getUsdValueOfTsla(amountdTsla));
 
-        if (amountTslaInUsdc < MINNIMUM_WITHDRWAL_AMOUNT) {
+        if (amountTslaInUsdc < i_minnimum_withdrwal_amount) {
             revert dTSLA_DosentMeetMinimumWithdrawalAmount();
         }
 
@@ -147,12 +141,7 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
         /// setting the args
         request.setArgs(args);
 
-        bytes32 requestId = _sendRequest(
-            request.encodeCBOR(),
-            i_subscriptionId,
-            GAS_LIMIT,
-            DON_ID
-        );
+        bytes32 requestId = _sendRequest(request.encodeCBOR(), i_subscriptionId, i_gasLimit, i_donId);
         s_requestId[requestId].amountOfToken = amountdTsla;
         s_requestId[requestId].requester = msg.sender;
         s_requestId[requestId].mintOrRedeem = MinOrRedeem.redeem;
@@ -164,88 +153,73 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
         bytes32 requestId,
         bytes memory response,
         bytes memory /*err*/
-    ) internal virtual override {
-        // if (s_requestId[requestId].mintOrRedeem == MinOrRedeem.Mint) {
-        //     _mintFulFilRequest(requestId, response);
-        // } else {
-        //     _redeemFulFilRequest(requestId , response);
-        // }
-        s_portfolioBalance = uint256(bytes32(response));
+    )
+        internal
+        virtual
+        override
+    {
+        dTeslaRequest memory req = s_requestId[requestId];
+        if (req.mintOrRedeem == MinOrRedeem.Mint) {
+            _mintFulFilRequest(requestId, response);
+        } else {
+            _redeemFulFilRequest(requestId, response);
+        }
+        // s_portfolioBalance = uint256(bytes32(response));
     }
 
-    function finishMint() external {
-        uint256 amountOfTokenToMint = s_requestId[s_mostRecentRequestId]
-            .amountOfToken;
-        if (
-            _getCollateralRatioAdjustTotalBalance(amountOfTokenToMint) >
-            s_portfolioBalance
-        ) {
-            revert dTSLA_NotEngoughCollateral();
-        }
-        _mint(
-            s_requestId[s_mostRecentRequestId].requester,
-            amountOfTokenToMint
-        );
-    }
+    // function finishMint() external onlyOwner{
+    //     uint256 amountOfTokenToMint = s_requestId[s_mostRecentRequestId].amountOfToken;
+    //     if (_getCollateralRatioAdjustTotalBalance(amountOfTokenToMint) > s_portfolioBalance) {
+    //         revert dTSLA_NotEngoughCollateral();
+    //     }
+    //     _mint(s_requestId[s_mostRecentRequestId].requester, amountOfTokenToMint);
+    // }
 
     function withdraw() external {
         uint256 amountToWithdraw = s_userToWithdrawlAmount[msg.sender];
         s_userToWithdrawlAmount[msg.sender] = 0;
 
-        bool success = ERC20(SEPOLIA_USDC).transfer(
-            msg.sender,
-            amountToWithdraw
-        );
+        bool success = ERC20(i_tokenOnSepolia).transfer(msg.sender, amountToWithdraw);
         if (!success) {
             revert dTSLA_TransactionFailed();
         }
     }
 
-    function getCalculatedNewTokenValue(
-        uint256 amountOfTokenToMint
-    ) public view returns (uint256) {
-        return
-            ((totalSupply() + amountOfTokenToMint) * getTslaPrice()) /
-            PRECISION;
+    function getCalculatedNewTokenValue(uint256 amountOfTokenToMint) public view returns (uint256) {
+        return ((totalSupply() + amountOfTokenToMint) * getTslaPrice()) / i_precision;
     }
 
     function getUsdcValueOfUsd(uint256 amount) public view returns (uint256) {
-        return (amount * getUsdcPrice()) / PRECISION;
+        return (amount * getUsdcPrice()) / i_precision;
     }
 
-    function getUsdValueOfTsla(
-        uint256 tslAmount
-    ) public view returns (uint256) {
-        return (tslAmount * getTslaPrice()) / PRECISION;
+    function getUsdValueOfTsla(uint256 tslAmount) public view returns (uint256) {
+        return (tslAmount * getTslaPrice()) / i_precision;
     }
 
     //// return the TSLA price in USDC
     function getTslaPrice() public view returns (uint256) {
-        AggregatorV3Interface priceFeed = AggregatorV3Interface(
-            SEPLOIA_TSLA_FEED
-        );
-        (, int256 priceOfTslaInUSDC, , , ) = priceFeed.latestRoundData();
-        return uint256(priceOfTslaInUSDC) * TSLA_PRICE_DECIMAL_PRECISION;
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(i_teslaUSD);
+        (, int256 priceOfTslaInUSDC,,,) = priceFeed.latestRoundData();
+        return uint256(priceOfTslaInUSDC) * i_tsla_price_decimal_precision;
     }
 
     //// return the USDC price in USDC
     function getUsdcPrice() public view returns (uint256) {
         {
-            AggregatorV3Interface priceFeed = AggregatorV3Interface(
-                SEPOLIA_USDC_FEED
-            );
-            (, int256 priceOfTslaInUSDC, , , ) = priceFeed.latestRoundData();
-            return uint256(priceOfTslaInUSDC) * TSLA_PRICE_DECIMAL_PRECISION;
+            AggregatorV3Interface priceFeed = AggregatorV3Interface(i_usdcUSD);
+            (, int256 priceOfTslaInUSDC,,,) = priceFeed.latestRoundData();
+            return uint256(priceOfTslaInUSDC) * i_tsla_price_decimal_precision;
         }
     }
+
     /*//////////////////////////////////////////////////////////////
                               VIEW AND PURE
     //////////////////////////////////////////////////////////////*/
-    function getRequest(
-        bytes32 requestId
-    ) public view returns (dTeslaRequest memory) {
+    function getRequest(bytes32 requestId) public view returns (dTeslaRequest memory) {
         return s_requestId[requestId];
     }
+
     function getPortfolioBalance() public view returns (uint256) {
         return s_portfolioBalance;
     }
@@ -263,11 +237,11 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
     }
 
     function getCollateralRatio() public view returns (uint256) {
-        return COLLATERAL_RATIO;
+        return i_collateral_ratio;
     }
 
     function getCollateralPrecision() public view returns (uint256) {
-        return COLLATERAL_PRECESION;
+        return i_collateral_precesion;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -276,17 +250,11 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
 
     /// Return the amount of TSLA value in USD is stored in our broker
     /// If we have enough TSAL token mint the dTSLA
-    function _mintFulFilRequest(
-        bytes32 requestId,
-        bytes memory response
-    ) internal {
+    function _mintFulFilRequest(bytes32 requestId, bytes memory response) internal {
         uint256 amountOfTokenToMint = s_requestId[requestId].amountOfToken;
         // this portfoilio Balance will be in USDC
         s_portfolioBalance = uint256(bytes32(response));
-        if (
-            _getCollateralRatioAdjustTotalBalance(amountOfTokenToMint) >
-            s_portfolioBalance
-        ) {
+        if (_getCollateralRatioAdjustTotalBalance(amountOfTokenToMint) > s_portfolioBalance) {
             revert dTSLA_NotEngoughCollateral();
         }
         if (amountOfTokenToMint > 0) {
@@ -294,10 +262,7 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
         }
     }
 
-    function _redeemFulFilRequest(
-        bytes32 requestId,
-        bytes memory response
-    ) internal {
+    function _redeemFulFilRequest(bytes32 requestId, bytes memory response) internal {
         // assume for now this has 18 decimals
         uint256 usdcAmount = uint256(bytes32(response));
         if (usdcAmount == 0) {
@@ -309,14 +274,8 @@ contract dTSLA is FunctionsClient, ConfirmedOwner, ERC20 {
     }
 
     /// this function convert the minted
-    function _getCollateralRatioAdjustTotalBalance(
-        uint256 amountOfToken
-    ) internal view returns (uint256) {
-        uint256 calaculatedNewTokenValue = getCalculatedNewTokenValue(
-            amountOfToken
-        );
-        return
-            (calaculatedNewTokenValue * COLLATERAL_RATIO) /
-            COLLATERAL_PRECESION;
+    function _getCollateralRatioAdjustTotalBalance(uint256 amountOfToken) internal view returns (uint256) {
+        uint256 calaculatedNewTokenValue = getCalculatedNewTokenValue(amountOfToken);
+        return (calaculatedNewTokenValue * i_collateral_ratio) / i_collateral_precesion;
     }
 }

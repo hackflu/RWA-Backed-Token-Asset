@@ -2,25 +2,48 @@
 pragma solidity ^0.8.19;
 import {Script, console} from "forge-std/Script.sol";
 import {dTSLA} from "../src/dTSLA.sol";
+import {HelperScript} from "./HelperScript.s.sol";
 
 contract DeployDTsla is Script {
-    uint64 constant subscriptionId = 6299;
-    address private constant router =
-        0xb83E47C2bC239B3bf370bc41e1459A34b41238D0;
-    string constant alpacaMintSourceCode =
-        "./functions/sources/alpacaBalance.js";
+    HelperScript helper = new HelperScript();
+    string constant alpacaMintSourceCode = "./functions/sources/alpacaBalance.js";
     string constant alpacaRedeemSourceCode = "";
+    address key = vm.envAddress("PUBLIC_KEY");
 
-    function run() public {
+    function run() public returns (dTSLA) {
+        (
+            address routerAddr,
+            address teslaUSD,
+            address usdcUSD,
+            address tokenOnSepolia,
+            bytes32 don_ID,
+            uint64 subscriptionId,
+            uint32 gas_limit,
+            uint256 precision,
+            uint256 tsla_price_decimal_precision,
+            uint256 collateral_ratio,
+            uint256 collateral_precesion,
+            uint256 minnimum_withdrwal_amount
+        ) = helper.s_networkConfig(block.chainid);
         string memory mintSource = vm.readFile(alpacaMintSourceCode);
-        vm.startBroadcast();
-        dTSLA dTSLA = new dTSLA(
+        vm.startBroadcast(key);
+        dTSLA teslaToken = new dTSLA(
             subscriptionId,
-            router,
+            routerAddr,
             mintSource,
-            alpacaRedeemSourceCode
+            alpacaRedeemSourceCode,
+            teslaUSD,
+            usdcUSD,
+            tokenOnSepolia,
+            don_ID,
+            gas_limit,
+            precision,
+            tsla_price_decimal_precision,
+            collateral_ratio,
+            collateral_precesion,
+            minnimum_withdrwal_amount
         );
         vm.stopBroadcast();
-        console.log(address(dTSLA));
+        return teslaToken;
     }
 }
